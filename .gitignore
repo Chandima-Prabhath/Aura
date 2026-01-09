@@ -1,3 +1,6 @@
-debug_output/
+debug_jsons/
 .vscode/
 __pycache__/
+uv.lock
+aura.egg-info/
+build/
