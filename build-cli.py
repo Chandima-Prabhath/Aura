@@ -1,5 +1,3 @@
-import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -23,7 +21,7 @@ def load_pyproject_toml(toml_path: Path) -> dict:
             print("  uv pip install tomli")
             sys.exit(1)
 
-# Load Metadata
+# Load the file
 PYPROJECT_PATH = Path(__file__).parent / "pyproject.toml"
 if not PYPROJECT_PATH.exists():
     sys.exit(f"ERROR: pyproject.toml not found at {PYPROJECT_PATH}")
@@ -31,6 +29,7 @@ if not PYPROJECT_PATH.exists():
 data = load_pyproject_toml(PYPROJECT_PATH)
 project_info = data.get("project", {})
 
+# Map variables
 APP_NAME = project_info.get("name", "Aura")
 APP_VERSION = project_info.get("version", "0.0.1")
 APP_DESCRIPTION = project_info.get("description", "")
@@ -44,135 +43,60 @@ CLI_PATH = BASE_PATH / "cli" / "main.py"
 CORE_PATH = BASE_PATH / "core"
 DIST_PATH = BASE_PATH / "dist" / "cli"
 ICON_PATH = BASE_PATH / "src" / "assets" / "icon.ico"
-UPX_PATH = BASE_PATH / "upx" # Folder containing upx.exe
 
-def build_pyinstaller():
+def build_nuitka():
     print("=" * 60)
-    print(f"PyInstaller: Building {APP_NAME} CLI...")
+    print(f"Nuitka: Building {APP_NAME} CLI...")
     print("=" * 60)
-
+    
     if not CLI_PATH.exists():
         sys.exit(f"ERROR: CLI entry not found at {CLI_PATH}")
-    # --------------------------------------------------------------
-    # CLEANUP
-    # --------------------------------------------------------------
-    # We need to remove old .spec files or they might force inclusion
-    # of browsers or webengine from previous builds.
-    for spec_file in BASE_PATH.glob("*.spec"):
-        print(f"Removing old spec file: {spec_file}")
-        spec_file.unlink()
+    if not CORE_PATH.exists():
+        sys.exit(f"ERROR: core directory not found at {CORE_PATH}")
 
-
-    # --------------------------------------------------------------
-    # PYINSTALLER ARGS
-    # --------------------------------------------------------------
     args = [
-        str(CLI_PATH),
-        "--name", APP_EXE_NAME.replace(".exe", ""),
+        "--standalone",
         "--onefile",
-        "--console",
-        "--clean",
-        "--noconfirm",
-        "--distpath", str(DIST_PATH),
-        "--add-data", f"{CORE_PATH}{os.pathsep}core",
-        "-y",  # Accept overwriting
+        "--windows-console-mode=force", 
+        "--assume-yes-for-downloads", 
+        f"--output-dir={DIST_PATH}",
+        f"--output-filename={APP_EXE_NAME}",
+        f"--include-data-dir={CORE_PATH}=core",
+        "--msvc=latest", 
+        str(CLI_PATH),
     ]
 
-    # UPX Compression
-    if UPX_PATH.exists() and (UPX_PATH / "upx.exe").exists():
-        args.extend(["--upx-dir", str(UPX_PATH)])
-        print("INFO: UPX found. Compression enabled.")
-    else:
-        print("WARNING: UPX not found. Output will be larger.")
-
-    # Icon
+    # Optional icon
     if ICON_PATH.exists():
-        args.extend(["--icon", str(ICON_PATH)])
+        args.append(f"--windows-icon-from-ico={ICON_PATH}")
+    else:
+        print(f"WARNING: Icon not found at {ICON_PATH}, building without icon.")
 
-    # --------------------------------------------------------------
-    # EXCLUDE MODULES (CRITICAL FOR SIZE)
-    # Aggressively exclude unused modules based on actual CLI usage:
-    # - CLI imports: textual, asyncio, argparse, pathlib, webbrowser, pyperclip, core.engine
-    # - Core engine uses: asyncio, logging, random, re, json, pathlib, typing, urllib, playwright
-    # - CLI does NOT use: PyQt6, data science, ML, image processing, databases, etc.
-    # - Do NOT exclude: logging, json, re, random, urllib (needed by core engine)
-    # --------------------------------------------------------------
-    exclude_modules = [
-        # ===== Data Science & ML =====
-        "matplotlib", "numpy", "pandas", "scipy", "sklearn", "tensorflow", "torch", "keras",
-        "seaborn", "plotly", "bokeh", "altair", "statsmodels",
-        
-        # ===== Image Processing =====
-        "PIL", "PIL._imaging", "PIL._imagingtk", "opencv", "cv2", "skimage", "imageio",
-        
-        # ===== GUI Frameworks (NOT Textual, and NOT PyQt6 for CLI) =====
-        "tkinter", "tkinter.messagebox", "tkinter.filedialog", "tkinter.ttk",
-        "PyQt5", "PyQt6", "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets",
-        "PyQt6.QtWebEngineWidgets", "PyQt6.QtWebEngineCore", "PyQt6.QtWebEngineQuick",
-        "PyQt6.Qt3D", "PyQt6.QtPdf", "PyQt6.QtSql", "PyQt6.QtMultimedia",
-        "wxPython", "wx", "Tkinter",
-        
-        # ===== Database & ORM =====
-        "sqlalchemy", "sqlite3", "pymongo", "psycopg2", "mysql",
-        
-        # ===== Web Frameworks =====
-        "django", "flask", "fastapi", "starlette", "tornado", "aiohttp",
-        
-        # ===== Development Tools =====
-        "pytest", "unittest", "nose", "coverage", "pydoc", "doctest",
-        "black", "flake8", "pylint", "mypy", "autopep8",
-        "ipython", "jupyter", "notebook",
-        
-        # ===== Rarely Used Network =====
-        "telnetlib", "smtpd", "imaplib", "poplib", "nntplib",
-        
-    ]
-    for mod in exclude_modules:
-        args.extend(["--exclude-module", mod])
+    args.append("--jobs=4")
 
-    # Add hidden imports (needed at runtime but not detected by PyInstaller)
-    hidden_imports = [
-        "importlib.metadata",  # Needed by Pygments for traceback rendering
-        "importlib.resources",
-    ]
-    for mod in hidden_imports:
-        args.extend(["--hidden-import", mod])
-
-    # Environment Cleanup
-    env = os.environ.copy()
-    # Filter Conda from PATH to avoid conflicts
-    if "PATH" in env:
-        paths = env["PATH"].split(os.pathsep)
-        filtered = [p for p in paths if "conda" not in p.lower()]
-        env["PATH"] = os.pathsep.join(filtered)
-
-    # Remove QT and CONDA env vars to ensure PyInstaller uses the bundled Qt
-    for var in list(env.keys()):
-        if "QT" in var.upper() or "CONDA" in var.upper():
-            del env[var]
-
-    # Run PyInstaller
-    print("Running PyInstaller...")
-    subprocess.run(
-        [sys.executable, "-m", "PyInstaller"] + args,
-        cwd=str(BASE_PATH),
-        env=env,
-        check=True,
-    )
+    print("Running Nuitka...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "nuitka"] + args,
+            cwd=str(BASE_PATH),
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print("\n" + "=" * 60)
+        print("ERROR: Nuitka build failed.")
+        print("=" * 60)
+        # Re-raise so the user sees the full traceback from Nuitka
+        raise 
 
     exe_path = DIST_PATH / APP_EXE_NAME
     if exe_path.exists():
         size_mb = exe_path.stat().st_size / 1024 / 1024
         print("\n" + "=" * 60)
-        print(f"PyInstaller build complete: {exe_path}")
+        print(f"Nuitka build complete: {exe_path}")
         print(f"Size: {size_mb:.2f} MB")
         print("=" * 60)
-        
-        if size_mb > 150:
-            print("\nWARNING: Size is still large (>150MB).")
-            print("Ensure 'pyqt6-webengine' is removed from pyproject.toml and run 'uv sync'.")
     else:
         sys.exit(f"ERROR: Expected exe not found at {exe_path}")
 
 if __name__ == "__main__":
-    build_pyinstaller()
+    build_nuitka()
