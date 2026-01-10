@@ -37,7 +37,7 @@ class MainWindow(QMainWindow):
 
     def test_download(self):
         # Test URL (Ubuntu ISO for size test)
-        url = "http://releases.ubuntu.com/22.04/ubuntu-22.04.4-desktop-amd64.iso"
+        url = "https://ct.animeheaven.me/video.mp4?8b710918bd9a9dd4a37cc061238f46f4&d"
         dest = Path.home() / "Downloads"
         
         self.manager.add_download(url, dest)

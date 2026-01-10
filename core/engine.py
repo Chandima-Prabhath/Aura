@@ -1,23 +1,19 @@
 # core/engine.py
 import asyncio
-import logging
 import random
 import re
 import json
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any, Union
 from urllib.parse import urljoin
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 # We import sync_playwright only for the install step (which is synchronous)
 from playwright.sync_api import sync_playwright as sync_playwright_installer 
+from core.logger import get_logger
+from core.models import AnimeSearchResult, Episode
 
 # Setup Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class AnimeHeavenEngine:
     def __init__(self, headless=True):
@@ -34,12 +30,20 @@ class AnimeHeavenEngine:
     # ------------------------------------------------------------------
     # UTILS
     # ------------------------------------------------------------------
-    def _save_json(self, filename: str, data):
+    def _save_json(self, filename: str, data: Any):
         """Helper to save data to JSON file for inspection."""
         filepath = self.output_dir / filename
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        logger.info(f"Saved data to {filepath}")
+        try:
+            def default_serializer(obj):
+                if hasattr(obj, '__dict__'):
+                    return vars(obj)
+                return str(obj)
+
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False, default=default_serializer)
+            logger.info(f"Saved data to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save JSON {filename}: {e}")
 
     # ------------------------------------------------------------------
     # BROWSER MANAGEMENT
@@ -134,7 +138,7 @@ class AnimeHeavenEngine:
     # ------------------------------------------------------------------
     # FEATURE: SEARCH
     # ------------------------------------------------------------------
-    async def search_anime(self, query: str) -> List[Dict]:
+    async def search_anime(self, query: str) -> List[AnimeSearchResult]:
         logger.info(f"Engine: Searching '{query}'...")
         page = await self.context.new_page()
         results = []
@@ -174,11 +178,11 @@ class AnimeHeavenEngine:
                                 img_url = await img_elem.get_attribute('src')
                                 img_url = urljoin("https://animeheaven.me/", img_url)
                             
-                            results.append({
-                                'title': title.strip(),
-                                'url': urljoin("https://animeheaven.me/", href),
-                                'image': img_url
-                            })
+                            results.append(AnimeSearchResult(
+                                title=title.strip(),
+                                url=urljoin("https://animeheaven.me/", href),
+                                image=img_url
+                            ))
                     except Exception as e:
                         pass
         
@@ -194,14 +198,17 @@ class AnimeHeavenEngine:
     # ------------------------------------------------------------------
     # FEATURE: GET SEASON DATA
     # ------------------------------------------------------------------
-    async def get_season_data(self, season_url: str) -> Dict:
+    async def get_season_data(self, season_url: str) -> Dict[str, Any]:
         logger.info(f"Engine: Fetching season data from {season_url}")
         page = await self.context.new_page()
+        
+        # We perform a hybrid return here: dict for the season structure, 
+        # but list of Episode objects inside.
         data = {
             'url': season_url,
             'title': '',
-            'episodes': [],
-            'related': []
+            'episodes': [], # List[Episode]
+            'related': [] # List[AnimeSearchResult]
         }
 
         try:
@@ -213,6 +220,9 @@ class AnimeHeavenEngine:
                 data['title'] = await title_elem.inner_text()
 
             ep_links = await page.query_selector_all('.linetitle2 a')
+            # They are usually listed descending, but we will reverse later
+            
+            collected_episodes = []
             for ep in ep_links:
                 try:
                     raw_text = await ep.inner_text()
@@ -228,16 +238,24 @@ class AnimeHeavenEngine:
                         
                         clean_name = self.clean_episode_name(raw_text)
                         
-                        data['episodes'].append({
-                            'name': clean_name,
-                            'raw_name': raw_text.strip(),
-                            'url': urljoin("https://animeheaven.me/", href),
-                            'gate_id': gate_id 
-                        })
+                        # Note: Episode number isn't explicit in HTML often, 
+                        # we will assign it after reversing the list.
+                        collected_episodes.append(Episode(
+                            name=clean_name,
+                            raw_name=raw_text.strip(),
+                            url=urljoin("https://animeheaven.me/", href),
+                            episode_number=0, # Placeholder
+                            gate_id=gate_id
+                        ))
                 except Exception as e:
                     pass
             
-            data['episodes'].reverse()
+            collected_episodes.reverse()
+            # Assign numbers
+            for i, ep in enumerate(collected_episodes):
+                ep.episode_number = i + 1
+            
+            data['episodes'] = collected_episodes
 
             related_items = await page.query_selector_all('.similarimg')
             for item in related_items:
@@ -249,11 +267,11 @@ class AnimeHeavenEngine:
                         r_img_elem = await item.query_selector('img')
                         r_img = await r_img_elem.get_attribute('src') if r_img_elem else ""
                         
-                        data['related'].append({
-                            'title': r_title.strip(),
-                            'url': urljoin("https://animeheaven.me/", r_href),
-                            'image': urljoin("https://animeheaven.me/", r_img)
-                        })
+                        data['related'].append(AnimeSearchResult(
+                            title=r_title.strip(),
+                            url=urljoin("https://animeheaven.me/", r_href),
+                            image=urljoin("https://animeheaven.me/", r_img)
+                        ))
                 except:
                     pass
 
@@ -315,30 +333,9 @@ class AnimeHeavenEngine:
             await asyncio.sleep(random.uniform(1.0, 2.0))
             return dl_link
 
-    async def resolve_episode_selection(self, season_url: str, selection: str) -> List[Dict]:
-        season_data = await self.get_season_data(season_url)
-        total_eps = len(season_data['episodes'])
-        
-        if total_eps == 0:
-            return []
-
-        indices = self._parse_episode_range(selection, total_eps)
-        
-        results = []
-        for index in indices:
-            if 0 < index <= total_eps:
-                ep_data = season_data['episodes'][index - 1]
-                logger.info(f"Engine: Fetching link for Ep {index} - {ep_data['name']}")
-                dl_link = await self.get_download_link(ep_data['url'], ep_data.get('gate_id'))
-                
-                if dl_link:
-                    results.append({
-                        'episode_number': index,
-                        'episode_name': ep_data['name'],
-                        'download_url': dl_link
-                    })
-        return results
-
+    # ------------------------------------------------------------------
+    # HELPERS
+    # ------------------------------------------------------------------
     @staticmethod
     def _parse_episode_range(range_str: str, total: int) -> List[int]:
         if not range_str or range_str.strip().lower() == "all":

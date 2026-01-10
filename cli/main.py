@@ -11,12 +11,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from textual.app import App, ComposeResult, Screen
 from textual.containers import Horizontal, Vertical, Center
 from textual.command import CommandPalette, Provider, Hit, Hits
-from textual.widgets import (
-    Header, Footer, Input, Button, ListView, 
-    ListItem, Static, Label
-)
+from textual.widgets import Header, Footer, Input, Button, ListView, ListItem, Static, Label, DataTable, Select
+from textual.containers import Grid
+from core.config import settings
 from textual import on, work, log
-from core.engine import AnimeHeavenEngine
+from core.interface import core
+from core.models import AnimeSearchResult, Episode
 
 # ----------------------------------------------------------------------
 # Command Palette Logic
@@ -209,7 +209,7 @@ class SeasonScreen(Screen):
                     yield Button("All", id="btn_select_all", variant="default", classes="btn_small")
                 
                 # Action Button
-                yield Button("GET DOWNLOAD LINKS", id="btn_fetch", variant="primary")
+                yield Button("DOWNLOAD SELECTED", id="btn_fetch", variant="primary")
 
             # 3. Split Content
             with Horizontal(id="split_view"):
@@ -232,8 +232,7 @@ class SeasonScreen(Screen):
         ep_list.append(ListItem(Label("Loading episodes...")))
         
         try:
-            engine = self.app.engine
-            data = await engine.get_season_data(self.anime_url)
+            data = await core.get_season(self.anime_url)
             
             ep_list.clear()
             if not data['episodes']:
@@ -243,7 +242,7 @@ class SeasonScreen(Screen):
             self.all_episodes = data['episodes']
             for ep in self.all_episodes:
                 idx = data['episodes'].index(ep) + 1
-                ep_list.append(EpisodeItem(idx, ep['name']))
+                ep_list.append(EpisodeItem(idx, ep.name))
                 
         except Exception as e:
             log.error(f"Season load error: {e}")
@@ -268,7 +267,7 @@ class SeasonScreen(Screen):
         for idx in sorted_indices:
             if 1 <= idx <= len(self.all_episodes):
                 ep_meta = self.all_episodes[idx - 1]
-                sel_list.append(QueueItem(idx, ep_meta['name']))
+                sel_list.append(QueueItem(idx, ep_meta.name))
 
     @on(Button.Pressed, "#btn_add_range")
     def on_add_range(self) -> None:
@@ -280,7 +279,10 @@ class SeasonScreen(Screen):
             return
 
         total = len(self.all_episodes)
-        parsed_indices = AnimeHeavenEngine._parse_episode_range(text, total)
+        total = len(self.all_episodes)
+        # We need to access static method from Engine or use helper? 
+        # Actually CoreInterface doesn't expose it. We can copy it or use engine directly as property of core.
+        parsed_indices = core.engine._parse_episode_range(text, total)
         
         if not parsed_indices:
             self.notify("Invalid format.", severity="error")
@@ -336,22 +338,45 @@ class SeasonScreen(Screen):
         btn = self.query_one("#btn_fetch", Button)
         original_label = btn.label
         btn.disabled = True
-        btn.label = "FETCHING..."
+        btn.label = "STARTING..."
         
         sorted_eps = sorted(list(self.selected_indices))
-        range_str = ",".join(map(str, sorted_eps))
+        
+        started = 0
+        failed = 0
+
+        # We need to iterate and trigger downloads 1 by 1
+        # To do this efficiently, we can use the existing resolution logic in interface?
+        # Actually interface has download_episode(episode_data).
+        # We have self.all_episodes which are dicts or objects? 
+        # In SeasonScreen.fetch_season_data: self.all_episodes = data['episodes'] which is List[Episode].
         
         try:
-            engine = self.app.engine
-            results = await engine.resolve_episode_selection(self.anime_url, range_str)
+             for idx in sorted_eps:
+                if 1 <= idx <= len(self.all_episodes):
+                    ep_obj = self.all_episodes[idx - 1]
+                    # We must pass a dict to download_episode based on previous analysis of interface.py?
+                    # Let's check interface.py again or assume vars() is safer.
+                    # CoreInterface.download_episode accepts 'episode_data: Dict'.
+                    
+                    # Also we need to ensure the engine resolves the link internally if not refreshed?
+                    # Wait, download_episode calls engine.get_download_link if not present.
+                    # Yes, logic is: episode_url provided -> resolution -> download.
+                    
+                    try:
+                         # We pass vars(ep_obj) to convert Episode to dict
+                         await core.download_episode(vars(ep_obj), self.anime_title)
+                         started += 1
+                    except Exception as e:
+                         log.error(f"Download failed for {ep_obj.name}: {e}")
+                         failed += 1
             
-            if results:
-                self.app.push_screen(ResultsScreen(results))
-            else:
-                self.notify("No links found.", severity="error")
-                
+             self.notify(f"Started {started} downloads. ({failed} failed)", timeout=5)
+             self.selected_indices.clear()
+             self.update_selection_list()
+             
         except Exception as e:
-            log.error(f"Fetch error: {e}")
+            log.error(f"Batch start error: {e}")
             self.notify(f"Error: {str(e)}", severity="error")
         finally:
             btn.disabled = False
@@ -428,8 +453,7 @@ class SearchScreen(Screen):
         results_list.append(ListItem(Label("Searching...")))
         
         try:
-            engine = self.app.engine
-            results = await engine.search_anime(query)
+            results = await core.search(query)
             results_list.clear()
             
             if not results:
@@ -438,7 +462,7 @@ class SearchScreen(Screen):
                 return
 
             for res in results:
-                results_list.append(SearchResultItem(res['title'], res['url'], res['image']))
+                results_list.append(SearchResultItem(res.title, res.url, res.image))
                 
             self.query_one("#app_logo").display = False
             self.query_one("#app_subtitle").display = False
@@ -457,6 +481,161 @@ class SearchScreen(Screen):
             self.app.push_screen(SeasonScreen(event.item.url, event.item.title))
 
 # ----------------------------------------------------------------------
+# New Screens
+# ----------------------------------------------------------------------
+
+class DownloadsScreen(Screen):
+    """Screen to monitor and manage downloads."""
+    BINDINGS = [
+        ("escape", "app.switch_screen('main')", "Home"),
+        ("ctrl+s", "app.switch_screen('settings')", "Settings"),
+        ("p", "toggle_pause", "Pause/Resume"),
+        ("c", "cancel_task", "Cancel"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(id="dl_container"):
+            yield Label("[bold cyan]Active Downloads[/bold cyan]", classes="page_title")
+            yield DataTable(id="dl_table")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one("#dl_table", DataTable)
+        table.cursor_type = "row"
+        self.col_keys = table.add_columns("ID", "Filename", "Progress", "Speed", "Status", "Total")
+        self.update_timer = self.set_interval(1.0, self.update_table)
+        self.update_table()
+
+    def update_table(self) -> None:
+        table = self.query_one("#dl_table", DataTable)
+        tasks = core.dm.get_all_tasks()
+        
+        # Get existing row keys
+        existing_keys = set(table.rows.keys())
+        current_keys = set()
+
+        for task in tasks:
+            key = task.id
+            current_keys.add(key)
+            
+            speed_str = f"{task.speed / 1024 / 1024:.2f} MB/s" if task.speed else "--"
+            progress_str = f"{task.progress:.1f}%"
+            status_styled = task.status.name
+            
+            if task.status.name == "DOWNLOADING":
+                status_styled = f"[green]{task.status.name}[/]"
+            elif task.status.name == "ERROR":
+                status_styled = f"[red]{task.status.name}[/]"
+            elif task.status.name == "COMPLETED":
+                status_styled = f"[blue]{task.status.name}[/]"
+
+            total_str = f"{task.total_bytes / 1024 / 1024:.2f} MB" if task.total_bytes else "--"
+
+            row = [
+                task.id[:8],
+                task.filename or task.url,
+                progress_str,
+                speed_str,
+                status_styled,
+                total_str
+            ]
+
+            if key in existing_keys:
+                for col_idx, val in enumerate(row):
+                    # Use stored column keys
+                    table.update_cell(key, self.col_keys[col_idx], val)
+            else:
+                table.add_row(*row, key=key)
+        
+        # Remove old rows (finished/removed tasks if logic allows, though DM keeps them)
+        # Actually DM keeps completed tasks.
+        pass
+
+    def action_toggle_pause(self):
+        table = self.query_one("#dl_table", DataTable)
+        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        if not row_key: return
+        
+        task = core.dm.get_task(row_key.value)
+        if not task: return
+
+        if task.status.name == "DOWNLOADING":
+             core.dm.pause_download(task.id)
+             self.notify(f"Paused {task.filename}")
+        elif task.status.name == "PAUSED":
+             core.dm.resume_download(task.id)
+             self.notify(f"Resumed {task.filename}")
+
+    def action_cancel_task(self):
+        table = self.query_one("#dl_table", DataTable)
+        row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+        if not row_key: return
+        
+        core.dm.cancel_download(row_key.value)
+        self.notify("Task cancelled.")
+
+
+class SettingsScreen(Screen):
+    """Screen to configure application settings."""
+    BINDINGS = [
+        ("escape", "app.switch_screen('main')", "Home"),
+        ("ctrl+d", "app.switch_screen('downloads')", "Downloads"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical(id="settings_container"):
+            yield Label("[bold]Settings[/bold]", classes="page_title")
+            
+            yield Label("Download Path")
+            yield Input(settings.get("download_path"), id="in_path")
+            
+            yield Label("Max Concurrent Downloads")
+            yield Select.from_values(["1", "3", "5", "10"], value=str(settings.get("max_concurrent_downloads")), id="sel_concurrent")
+            
+            yield Label("Download Threads (Per File)")
+            yield Select.from_values(["1", "3", "5", "8", "16"], value=str(settings.get("download_threads")), id="sel_threads")
+
+            yield Label("Log Level")
+            yield Select.from_values(["DEBUG", "INFO", "WARNING", "ERROR"], value=settings.get("log_level"), id="sel_loglevel")
+            
+            yield Button("Save Settings", variant="primary", id="btn_save")
+        yield Footer()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_save":
+            self.save_settings()
+
+    def save_settings(self):
+        path = self.query_one("#in_path", Input).value
+        conc = self.query_one("#sel_concurrent", Select).value
+        threads = self.query_one("#sel_threads", Select).value
+        level = self.query_one("#sel_loglevel", Select).value
+        
+        if path:
+            settings.set("download_path", path, save=False)
+        if conc:
+            settings.set("max_concurrent_downloads", int(conc), save=False)
+        if threads:
+            settings.set("download_threads", int(threads), save=False)
+        if level:
+            settings.set("log_level", level, save=False)
+            
+        settings.save()
+        
+        # Reload DM basic config if needed? 
+        # DM reads settings dynamically for threads, but max_concurrent is in init?
+        # We might need to update DM instance or restart app to fully apply max_concurrent.
+        # But threads and level are dynamic.
+        
+        if conc:
+            core.dm.max_concurrent = int(conc)
+
+        self.notify("Settings Saved!", severity="information")
+
+
+# ----------------------------------------------------------------------
 # Main App
 # ----------------------------------------------------------------------
 
@@ -464,14 +643,18 @@ class AnimeHeavenApp(App):
     """Professional TUI App."""
     
     # Global Bindings
-    BINDINGS = [("ctrl+q", "app.quit", "Quit App")]
+    BINDINGS = [
+        ("ctrl+q", "app.quit", "Quit"),
+        ("ctrl+d", "switch_screen('downloads')", "Downloads"),
+        ("ctrl+s", "switch_screen('settings')", "Settings"),
+        ("ctrl+h", "switch_screen('main')", "Home"),
+    ]
     
     # Register the Command Provider
     COMMANDS = {AnimeCommandProvider}
 
     def __init__(self, initial_query: str = None, initial_url: str = None):
         super().__init__()
-        self.engine = None
         self.initial_query = initial_query
         self.initial_url = initial_url
 
@@ -667,20 +850,30 @@ class AnimeHeavenApp(App):
 
     SCREENS = {
         "main": SearchScreen,
+        "downloads": DownloadsScreen,
+        "settings": SettingsScreen,
     }
 
+    def compose(self) -> ComposeResult:
+        # Global Navigation Bar or just rely on Screens?
+        # Textual apps usually push/pop. 
+        # But for main sections (Home, Downloads, Settings), switching is better.
+        yield Header()
+        yield Footer()
+
     async def on_mount(self) -> None:
-        self.app.notify("Initializing Engine...", timeout=2)
+        self.app.notify("Initializing Aura Core...", timeout=2)
+# ... [rest of initial logic]
+
         try:
-            self.engine = AnimeHeavenEngine(headless=True) 
-            await self.engine.start()
-            self.app.notify("Engine Ready!", severity="information", timeout=2)
+            await core.initialize()
+            self.app.notify("Aura Core Ready!", severity="information", timeout=2)
             
             # Routing Logic
             if self.initial_url:
                 self.notify("Loading direct season...", timeout=2)
                 try:
-                    data = await self.engine.get_season_data(self.initial_url)
+                    data = await core.get_season(self.initial_url)
                     title = data.get('title', 'Unknown Season')
                     self.push_screen(SeasonScreen(self.initial_url, title))
                 except Exception as e:
@@ -699,11 +892,10 @@ class AnimeHeavenApp(App):
             log.error(f"Engine startup error: {e}")
 
     async def on_unmount(self) -> None:
-        if self.engine:
-            try:
-                await self.engine.close()
-            except Exception:
-                pass
+        try:
+            await core.shutdown()
+        except Exception:
+            pass
 
 # ----------------------------------------------------------------------
 # Entry Point & Arg Parsing
