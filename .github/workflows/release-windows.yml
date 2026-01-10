@@ -5,7 +5,6 @@ on:
     tags:
       - 'v*'
 
-# Added pull-requests read permission to allow auto-generation of release notes from PR titles
 permissions:
   contents: write
   pull-requests: read
@@ -61,10 +60,10 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          # body: "Release ${{ github.ref_name }}" <-- Removed this line so auto-generation takes over
-          generate_release_notes: true  # <--- This triggers the automatic generation
+          generate_release_notes: true
           draft: false
-          prerelease: false
+          # This sets prerelease to true if the tag contains 'beta', 'alpha', or 'rc'
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
           files: |
             ${{ env.CLI_ARTIFACT_PATH }}
             ${{ env.GUI_ARTIFACT_PATH }}
