@@ -1,0 +1,91 @@
+name: Build CLI and GUI with Nuitka on Windows
+
+on:
+  push:
+    branches:
+      - '**'  # run on any branch
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Windows CLI + GUI
+    runs-on: windows-latest
+
+    steps:
+      # 1. Checkout repo
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # 2. Install Python (version from pyproject.toml: requires-python = ">=3.11")
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: 'pyproject.toml'
+
+      # 3. Install uv
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # 4. Install project & dev dependencies (from pyproject.toml + dependency-groups)
+      - name: Install project dependencies with uv
+        run: uv sync --all-extras --dev
+
+      # 5. Install Playwright browsers & system deps (your project uses playwright)
+      - name: Ensure Playwright browsers are installed
+        run: uv run playwright install --with-deps
+
+      # 6. Build CLI exe (onefile, with console, includes core/)
+      - name: Build CLI with Nuitka
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: main
+          script-name: cli/main.py
+          mode: app                    # onefile on Windows (what you used locally)
+          windows-console-mode: force  # --windows-console-mode=force
+          msvc: latest                 # match your --msvc=latest
+          jobs: 4                      # match your --jobs=4
+          assume-yes-for-downloads: 'on'  # match your --assume-yes-for-downloads
+          include-data-dir: |
+            core=core                  # match your --include-data-dir=core=core
+          # Icon: optional; will only be used if src/assets/icon.ico exists
+          windows-icon-from-ico: src/assets/icon.ico
+
+      # 7. Build GUI exe (onefile, no console, PyQt6 plugin, includes core/)
+      - name: Build GUI with Nuitka
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: main
+          script-name: src/main.py
+          mode: app                    # onefile on Windows
+          enable-plugins: pyqt6        # match your --enable-plugin=pyqt6
+          windows-console-mode: disable  # match your --windows-console-mode=disable
+          msvc: latest
+          jobs: 4
+          assume-yes-for-downloads: 'on'
+          include-data-dir: |
+            core=core
+          windows-icon-from-ico: src/assets/icon.ico
+
+      # 8. Upload artifacts (both EXEs)
+      # Nuitka-Action on Windows builds into a .exe in the repo root or build folder by default.
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: aura-cli-exe
+          # If Nuitka-Action uses build/cli/main.exe, adjust path; if CLI name differs, tweak this.
+          path: build/cli/main.exe
+          if-no-files-found: error
+          include-hidden-files: true  # recommended in Nuitka-Action docs for artifacts【turn5fetch0】
+
+      - name: Upload GUI artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: aura-gui-exe
+          # If Nuitka-Action uses build/src/main.exe, adjust path; if GUI name differs, tweak this.
+          path: build/src/main.exe
+          if-no-files-found: error
+          include-hidden-files: true
