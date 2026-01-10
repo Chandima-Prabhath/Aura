@@ -19,7 +19,6 @@
 Table of Contents
 
 - [Overview](#overview)
-- [Key Features](#key-features)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
@@ -34,14 +33,6 @@ Table of Contents
 ## Overview
 
 `Aura` extracts direct episode download links from AnimeHeaven.me while minimizing bandwidth and avoiding common bot-detection signals. It combines a resilient Playwright automation core with a small CLI and an optional GUI front-end.
-
-## Key Features
-
-- Stealthy Playwright automation with anti-detection techniques
-- Modular design: search → episode data → download link resolution
-- Bandwidth-aware (blocks video streaming during extraction)
-- JSON debug output for reproducible troubleshooting
-- Tested integration flow and development tooling via `uv`
 
 ## Requirements
 
@@ -152,13 +143,8 @@ uv sync
 Run tests:
 
 ```powershell
-uv run python tests/integration_test.py
+uv run python -m pytest -q tests/integration_test.py
 ```
-
-Recommended next steps
-
-- Add CI to run tests on push (GitHub Actions)
-- Add automated packaging for releases
 
 ## Roadmap
 
@@ -177,5 +163,3 @@ Contributions are welcome. Please open issues for bugs or feature requests and s
 MIT — see [LICENSE](LICENSE) for details.
 
 ---
-
-If you'd like, I can: add badges, create a short CONTRIBUTING.md, or wire up a basic GitHub Actions workflow for tests and linting.
