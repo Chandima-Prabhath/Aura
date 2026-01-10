@@ -34,11 +34,7 @@ jobs:
       - name: Install project dependencies with uv
         run: uv sync --all-extras --dev
 
-      # 5. Install Playwright browsers & system deps (your project uses playwright)
-      - name: Ensure Playwright browsers are installed
-        run: uv run playwright install --with-deps
-
-      # 6. Build CLI exe (onefile, with console, includes core/)
+      # 5. Build CLI exe (onefile, with console, includes core/)
       - name: Build CLI with Nuitka
         uses: Nuitka/Nuitka-Action@main
         with:
@@ -54,7 +50,7 @@ jobs:
           # Icon: optional; will only be used if src/assets/icon.ico exists
           windows-icon-from-ico: src/assets/icon.ico
 
-      # 7. Build GUI exe (onefile, no console, PyQt6 plugin, includes core/)
+      # 6. Build GUI exe (onefile, no console, PyQt6 plugin, includes core/)
       - name: Build GUI with Nuitka
         uses: Nuitka/Nuitka-Action@main
         with:
@@ -70,7 +66,7 @@ jobs:
             core=core
           windows-icon-from-ico: src/assets/icon.ico
 
-      # 8. Upload artifacts (both EXEs)
+      # 7. Upload artifacts (both EXEs)
       # Nuitka-Action on Windows builds into a .exe in the repo root or build folder by default.
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v5
