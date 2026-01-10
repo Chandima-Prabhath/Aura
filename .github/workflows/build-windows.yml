@@ -1,9 +1,7 @@
 name: Build CLI and GUI with Nuitka on Windows
 
 on:
-  push:
-    branches:
-      - '**'
+  workflow_dispatch: {}
 
 permissions:
   contents: read
