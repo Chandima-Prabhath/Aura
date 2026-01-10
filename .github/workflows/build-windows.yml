@@ -31,47 +31,20 @@ jobs:
       - name: Install project dependencies with uv
         run: uv sync --all-extras --dev
 
-      - name: Build CLI with Nuitka
-        uses: Nuitka/Nuitka-Action@main
-        with:
-          nuitka-version: main
-          script-name: cli/main.py
-          mode: app
-          windows-console-mode: force
-          msvc: latest
-          jobs: 4
-          assume-yes-for-downloads: 'on'
-          include-data-dir: |
-            core=core
-          windows-icon-from-ico: src/assets/icon.ico
+      - name: Build CLI
+        run: uv run python build-cli.py
 
-      - name: Build GUI with Nuitka
-        uses: Nuitka/Nuitka-Action@main
-        with:
-          nuitka-version: main
-          script-name: src/main.py
-          mode: app
-          enable-plugins: pyqt6
-          windows-console-mode: disable
-          msvc: latest
-          jobs: 4
-          assume-yes-for-downloads: 'on'
-          include-data-dir: |
-            core=core
-          windows-icon-from-ico: src/assets/icon.ico
+      - name: Build GUI
+        run: uv run python build-gui.py
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v5
         with:
-          name: aura-cli-exe
-          path: build/main.exe
+          path: dist/cli/*.exe
           if-no-files-found: error
-          include-hidden-files: true
 
       - name: Upload GUI artifact
         uses: actions/upload-artifact@v5
         with:
-          name: aura-gui-exe
-          path: build/main.exe
+          path: dist/gui/*.exe
           if-no-files-found: error
-          include-hidden-files: true
