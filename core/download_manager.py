@@ -1,10 +1,15 @@
 # core/download_manager.py
 import os
 import uuid
-import shutil
+import json
+import threading
+import time
 from pathlib import Path
-from PyQt6.QtCore import QObject, pyqtSignal, QThread, QMutex, QMutexLocker
+from typing import Dict, List, Optional, Callable
 from pysmartdl2 import SmartDL
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # ----------------------------------------------------------------------
 # Data Models
@@ -29,237 +34,355 @@ class DownloadTask:
         self.downloaded_bytes = 0
         self.total_bytes = 0
         self.speed = 0  # Bytes per second
-        self.progress_percentage = 0.0
+        self.progress = 0.0
+        self.error_message = None
         
         # Internal components
-        self.worker = None      # The QThread running this task
-        self.smart_dl = None   # The PySmartDL instance
-        self.dest_path = None  # Full path once resolved
+        self.smart_dl: Optional[SmartDL] = None
+        self.dest_path = None
+        self._stop_event = threading.Event()
 
-# ----------------------------------------------------------------------
-# Worker Thread (Runs the download in background)
-# ----------------------------------------------------------------------
-class DownloadWorker(QThread):
-    # Signals to notify the GUI/Manager
-    progress_signal = pyqtSignal(dict)  # { task_id: str, ...stats }
-    finished_signal = pyqtSignal(dict, bool, str) # {task_id}, success_bool, error_msg
-
-    def __init__(self, task):
-        super().__init__()
-        self.task = task
-        self._is_running = True
-
-    def run(self):
-        # Determine destination path
-        if not self.task.dest_folder.exists():
-            self.task.dest_folder.mkdir(parents=True, exist_ok=True)
-        
-        # PySmartDL logic
-        # We set threads=8 for high speed (multi-part)
-        # progress_bar=False because we handle it manually
-        try:
-            self.task.status = DownloadStatus.DOWNLOADING
-            dest = self.task.dest_folder / self.task.filename if self.task.filename else self.task.dest_folder
-            
-            self.task.smart_dl = SmartDL(
-                self.task.url, 
-                dest=dest,
-                progress_bar=False,
-                threads=8, # Multi-threaded download
-                connections=8
-            )
-            
-            # Hook up pysmartdl's internal progress updates
-            self.task.smart_dl.add_hook(self._hook_handler)
-            
-            # Start blocking download
-            self.task.smart_dl.start(blocking=True)
-            
-            # If we get here, it finished successfully
-            self.task.status = DownloadStatus.COMPLETED
-            self.task.progress_percentage = 100.0
-            self.task.downloaded_bytes = self.task.total_bytes
-            
-            # Emit final success
-            stats = self._get_stats()
-            self.finished_signal.emit(stats, True, "Download Completed")
-
-        except Exception as e:
-            self.task.status = DownloadStatus.ERROR
-            self.task.smart_dl = None # Clean up
-            self.finished_signal.emit({"task_id": self.task.id}, False, str(e))
-
-    def _hook_handler(self, obj):
-        """
-        Callback from pysmartdl2 during download.
-        obj contains: dl_size, downloaded, speed, etc.
-        """
-        # Update task state
-        self.task.downloaded_bytes = obj.downloaded
-        self.task.total_bytes = obj.filesize if hasattr(obj, 'filesize') else obj.dl_size
-        self.task.speed = obj.speed
-        
-        if self.task.total_bytes > 0:
-            self.task.progress_percentage = (self.task.downloaded_bytes / self.task.total_bytes) * 100
-            
-        # Emit progress update to GUI
-        self.progress_signal.emit(self._get_stats())
-
-    def _get_stats(self):
-        """Return a dict with current stats."""
+    def to_dict(self):
+        """Serialize task to dictionary."""
         return {
-            "task_id": self.task.id,
-            "url": self.task.url,
-            "filename": self.task.smart_dl.get_dest() if self.task.smart_dl else self.task.filename or "Unknown",
-            "downloaded": self.task.downloaded_bytes,
-            "total": self.task.total_bytes,
-            "speed": self.task.speed,
-            "progress": self.task.progress_percentage,
-            "status": self.task.status
+            "id": self.id,
+            "url": self.url,
+            "dest_folder": str(self.dest_folder),
+            "filename": self.filename,
+            "status": self.status,
+            "downloaded": self.downloaded_bytes,
+            "total": self.total_bytes,
+            "progress": self.progress,
+            "speed": self.speed,
+            "error": self.error_message
         }
-
-    def pause(self):
-        if self.task.smart_dl:
-            self.task.status = DownloadStatus.PAUSED
-            self.task.smart_dl.stop()
-            self.wait() # Wait for thread to finish blocking
-            return True
-        return False
-
-    def resume(self):
-        # PySmartDL resumes automatically if target file exists and is partial
-        if self.task.status == DownloadStatus.PAUSED:
-            self.task.status = DownloadStatus.QUEUED # Move back to manager queue
-            return True
-        return False
-
-# ----------------------------------------------------------------------
-# Manager: Handles Queue and UI Communication
-# ----------------------------------------------------------------------
-class DownloadManager(QObject):
-    # Signals for the Main Window to connect to
-    task_added = pyqtSignal(dict)
-    task_updated = pyqtSignal(dict)
-    task_finished = pyqtSignal(dict, bool, str) # task_dict, success, message
     
-    def __init__(self, max_concurrent=3):
-        super().__init__()
-        self.active_tasks = {} # id -> DownloadTask
-        self.queue = []
+    @classmethod
+    def from_dict(cls, data):
+        """Deserialize task from dictionary."""
+        task = cls(
+            data["id"], 
+            data["url"], 
+            data["dest_folder"], 
+            data["filename"]
+        )
+        task.status = data.get("status", DownloadStatus.QUEUED)
+        task.downloaded_bytes = data.get("downloaded", 0)
+        task.total_bytes = data.get("total", 0)
+        task.progress = data.get("progress", 0.0)
+        return task
+
+# ----------------------------------------------------------------------
+# Manager
+# ----------------------------------------------------------------------
+class DownloadManager:
+    _instance = None
+    
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(DownloadManager, cls).__new__(cls)
+        return cls._instance
+
+    def __init__(self, max_concurrent=3, persistence_file="downloads.json"):
+        if hasattr(self, "_initialized"):
+            return
+            
         self.max_concurrent = max_concurrent
-        self.mutex = QMutex()
-
-    def add_download(self, url, dest_folder, filename=None):
-        """
-        Add a new download to the queue.
-        """
+        self.persistence_file = persistence_file
+        
+        self.tasks: Dict[str, DownloadTask] = {} # id -> DownloadTask
+        self.queue: List[str] = [] # List of task_ids
+        
+        self.lock = threading.RLock()
+        self.running_threads: Dict[str, threading.Thread] = {}
+        
+        # Callbacks: List of functions (task_dict) -> None
+        self.progress_callbacks: List[Callable] = [] 
+        self.completion_callbacks: List[Callable] = [] # (task_dict, success, message)
+        
+        self._initialized = True
+        self._load_state()
+        
+        # Start the queue processor
+        self.processor_thread = threading.Thread(target=self._queue_processor_loop, daemon=True)
+        self.processor_thread.start()
+        
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    
+    def add_download(self, url: str, dest_folder: str, filename: str = None) -> str:
+        """Add a new download task."""
         task_id = str(uuid.uuid4())
+        task = DownloadTask(task_id, url, dest_folder, filename)
         
-        # If filename is not provided, we guess it or let PySmartDL handle it
-        # But for consistent tracking, it's better to know it early if possible.
-        # PySmartDL will resolve it on start.
-        
-        new_task = DownloadTask(task_id, url, dest_folder, filename)
-        
-        with QMutexLocker(self.mutex):
-            self.active_tasks[task_id] = new_task
-            self.queue.append(new_task)
-        
-        # Notify UI
-        initial_stats = {
-            "task_id": task_id,
-            "url": url,
-            "filename": filename or "Resolving...",
-            "downloaded": 0,
-            "total": 0,
-            "speed": 0,
-            "progress": 0.0,
-            "status": DownloadStatus.QUEUED
-        }
-        self.task_added.emit(initial_stats)
-        
-        # Trigger processing
-        self._process_queue()
+        with self.lock:
+            self.tasks[task_id] = task
+            self.queue.append(task_id)
+            self._save_state()
+            
+        logger.info(f"Added download task: {task_id} - {url}")
+        self._notify_progress(task)
+        return task_id
 
-    def pause_download(self, task_id):
-        with QMutexLocker(self.mutex):
-            if task_id in self.active_tasks:
-                task = self.active_tasks[task_id]
-                if task.worker and task.worker.isRunning():
-                    task.worker.pause()
+    def pause_download(self, task_id: str):
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if task and task.status == DownloadStatus.DOWNLOADING:
+                if task_id in self.running_threads:
+                    # PySmartDL blocking call cannot be easily interrupted nicely without stop()
+                    # But stop() is called on the object.
+                    if task.smart_dl:
+                        task.smart_dl.stop() 
                     task.status = DownloadStatus.PAUSED
-                    self.task_updated.emit({"task_id": task_id, "status": task.status})
+                    self._save_state()
+                    logger.info(f"Paused task: {task_id}")
+                    self._notify_progress(task)
 
-    def cancel_download(self, task_id):
-        with QMutexLocker(self.mutex):
-            if task_id in self.active_tasks:
-                task = self.active_tasks[task_id]
-                if task.worker:
-                    if task.worker.isRunning():
-                        task.worker.terminate() # Force kill
-                        task.worker.wait()
-                
-                # Cleanup partial file
-                if task.smart_dl and task.smart_dl.get_dest() and Path(task.smart_dl.get_dest()).exists():
-                    Path(task.smart_dl.get_dest()).unlink()
-                
-                task.status = DownloadStatus.CANCELLED
-                # Remove from active (optional, or keep as 'Cancelled' for history)
-                self.task_updated.emit({"task_id": task_id, "status": task.status})
+    def resume_download(self, task_id: str):
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if task and task.status == DownloadStatus.PAUSED:
+                task.status = DownloadStatus.QUEUED
+                if task_id not in self.queue:
+                    self.queue.append(task_id)
+                self._save_state()
+                logger.info(f"Resumed task: {task_id}")
+                self._notify_progress(task)
 
-    def resume_download(self, task_id):
-        with QMutexLocker(self.mutex):
-            if task_id in self.active_tasks:
-                task = self.active_tasks[task_id]
-                if task.status == DownloadStatus.PAUSED:
-                    task.resume() # Logic handled by checking status in run
-                    self.queue.append(task) # Re-add to end of queue
-                    self._process_queue()
+    def cancel_download(self, task_id: str):
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return
 
-    def _process_queue(self):
-        """Start tasks from queue if slots available."""
-        with QMutexLocker(self.mutex):
-            running = [t for t in self.active_tasks.values() 
-                       if t.status == DownloadStatus.DOWNLOADING]
+            if task.status == DownloadStatus.DOWNLOADING:
+                if task.smart_dl:
+                    task.smart_dl.stop()
             
-            while len(running) < self.max_concurrent and self.queue:
-                # Get next queued task
-                # Filter out paused/cancelled tasks from queue
-                task = self.queue.pop(0)
-                if task.status == DownloadStatus.QUEUED:
-                    self._start_task(task)
-                    running.append(task)
-
-    def _start_task(self, task):
-        # Create worker
-        worker = DownloadWorker(task)
-        task.worker = worker
-        
-        # Connect signals
-        worker.progress_signal.connect(self._on_progress)
-        worker.finished_signal.connect(self._on_finished)
-        
-        worker.start()
-
-    def _on_progress(self, stats):
-        # Forward stats to GUI
-        self.task_updated.emit(stats)
-
-    def _on_finished(self, stats, success, message):
-        # This is called when a thread finishes
-        task_id = stats.get("task_id")
-        
-        with QMutexLocker(self.mutex):
-            if task_id in self.active_tasks:
-                # Update internal state
-                self.active_tasks[task_id].status = DownloadStatus.COMPLETED if success else DownloadStatus.ERROR
-                
-                # Process next in queue
-                self._process_queue()
-        
-        # Notify GUI
-        # Note: stats dict might be partial on error, so we ensure ID is there
-        if not success:
-            stats = {"task_id": task_id}
+            task.status = DownloadStatus.CANCELLED
+            if task_id in self.queue:
+                self.queue.remove(task_id)
             
-        self.task_finished.emit(stats, success, message)
+            # Cleanup partial files
+            try:
+                if task.smart_dl:
+                    path = task.smart_dl.get_dest()
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                elif task.filename:
+                    path = Path(task.dest_folder) / task.filename
+                    if path.exists():
+                        path.unlink()
+            except Exception as e:
+                logger.error(f"Error cleaning up cancelled task {task_id}: {e}")
+
+            self._save_state()
+            self._notify_progress(task)
+
+    def get_task(self, task_id: str) -> Optional[Dict]:
+        with self.lock:
+            task = self.tasks.get(task_id)
+            return task.to_dict() if task else None
+
+    def get_all_tasks(self) -> List[Dict]:
+        with self.lock:
+            return [t.to_dict() for t in self.tasks.values()]
+
+    def add_progress_callback(self, callback: Callable):
+        self.progress_callbacks.append(callback)
+
+    def add_completion_callback(self, callback: Callable):
+        self.completion_callbacks.append(callback)
+
+    # ------------------------------------------------------------------
+    # Internal Logic
+    # ------------------------------------------------------------------
+    
+    def _queue_processor_loop(self):
+        """Background thread to monitor and start queued tasks."""
+        while True:
+            with self.lock:
+                # Clean up finished threads
+                finished_ids = []
+                for tid, thread in self.running_threads.items():
+                    if not thread.is_alive():
+                        finished_ids.append(tid)
+                
+                for tid in finished_ids:
+                    del self.running_threads[tid]
+
+                # Check slots
+                active_count = len(self.running_threads)
+                slots = self.max_concurrent - active_count
+                
+                # Start new tasks
+                if slots > 0:
+                    # Get next eligible task
+                    candidate_id = None
+                    for tid in self.queue:
+                        task = self.tasks[tid]
+                        if task.status == DownloadStatus.QUEUED:
+                            candidate_id = tid
+                            break
+                    
+                    if candidate_id:
+                        self.queue.remove(candidate_id)
+                        self._start_task_thread(candidate_id)
+            
+            time.sleep(1) # Check every second
+
+    def _start_task_thread(self, task_id):
+        task = self.tasks[task_id]
+        task.status = DownloadStatus.DOWNLOADING
+        
+        thread = threading.Thread(
+            target=self._download_worker, 
+            args=(task,),
+            name=f"Download-{task_id}",
+            daemon=True
+        )
+        self.running_threads[task_id] = thread
+        thread.start()
+        logger.info(f"Started download thread for {task_id}")
+
+    def _download_worker(self, task: DownloadTask):
+        try:
+            if not task.dest_folder.exists():
+                task.dest_folder.mkdir(parents=True, exist_ok=True)
+
+            dest = str(task.dest_folder / task.filename) if task.filename else str(task.dest_folder)
+            
+            # PySmartDL Setup
+            # threads=5 is a good balance
+            obj = SmartDL(task.url, dest, progress_bar=False, threads=5)
+            task.smart_dl = obj
+            
+            # Start (Non-blocking)
+            obj.start(blocking=False)
+            
+            while not obj.isFinished():
+                # Check for stop request (pause/cancel)
+                if task.status != DownloadStatus.DOWNLOADING:
+                     if not obj.isFinished():
+                        obj.stop()
+                     break
+
+                try:
+                    # Update stats safely
+                    task.speed = obj.get_speed(human=False)
+                    task.downloaded_bytes = obj.get_dl_size()
+                    total = obj.get_final_filesize()
+                    if total:
+                        task.total_bytes = total
+                        task.progress = (task.downloaded_bytes / total) * 100
+                    
+                    self._notify_progress(task)
+                except Exception:
+                    # Ignore errors during stat fetch (e.g. might have finished)
+                    pass
+                    
+                time.sleep(0.2)
+
+            if obj.isSuccessful():
+                task.status = DownloadStatus.COMPLETED
+                task.progress = 100.0
+                # Final safe stat update
+                try:
+                    task.total_bytes = obj.get_final_filesize() or task.total_bytes
+                    task.downloaded_bytes = task.total_bytes
+                    task.filename = Path(obj.get_dest()).name
+                except:
+                    pass
+                
+                logger.info(f"Task {task.id} completed successfully.")
+                self._notify_completion(task, True, "Download Completed")
+                
+            else:
+                # If we stopped manually, it might not be successful, but check status
+                if task.status in [DownloadStatus.PAUSED, DownloadStatus.CANCELLED]:
+                    return 
+
+                # Genuine error
+                err = "Unknown error"
+                try:
+                   err = str(obj.get_errors())
+                except:
+                   pass
+                   
+                task.status = DownloadStatus.ERROR
+                task.error_message = err
+                logger.error(f"Task {task.id} failed: {err}")
+                self._notify_completion(task, False, err)
+                
+        except Exception as e:
+            # Check if this exception was caused by us stopping it
+            if task.status in [DownloadStatus.PAUSED, DownloadStatus.CANCELLED]:
+                 return
+
+            task.status = DownloadStatus.ERROR
+            task.error_message = str(e)
+            logger.exception(f"Exception in download worker for {task.id}")
+            self._notify_completion(task, False, str(e))
+            
+        finally:
+            self._save_state()
+
+    def _notify_progress(self, task: DownloadTask):
+        data = task.to_dict()
+        for cb in self.progress_callbacks:
+            try:
+                cb(data)
+            except Exception:
+                pass
+
+    def _notify_completion(self, task: DownloadTask, success: bool, message: str):
+        data = task.to_dict()
+        for cb in self.completion_callbacks:
+            try:
+                cb(data, success, message)
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+    def _save_state(self):
+        data = {
+            "queue": self.queue,
+            "tasks": {tid: t.to_dict() for tid, t in self.tasks.items()}
+        }
+        try:
+            with open(self.persistence_file, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+
+    def _load_state(self):
+        if not os.path.exists(self.persistence_file):
+            return
+            
+        try:
+            with open(self.persistence_file, 'r') as f:
+                data = json.load(f)
+                
+            self.queue = data.get("queue", [])
+            tasks_data = data.get("tasks", {})
+            
+            for tid, tdata in tasks_data.items():
+                task = DownloadTask.from_dict(tdata)
+                # Reset downloading tasks to queued (or paused) on restart
+                if task.status == DownloadStatus.DOWNLOADING:
+                    task.status = DownloadStatus.QUEUED
+                    if tid not in self.queue:
+                        self.queue.append(tid)
+                
+                self.tasks[tid] = task
+                
+            logger.info(f"Loaded {len(self.tasks)} tasks from state.")
+            
+        except Exception as e:
+            logger.error(f"Failed to load state: {e}")
+
+# Global instance
+manager = DownloadManager()

@@ -1,6 +1,5 @@
 # core/engine.py
 import asyncio
-import logging
 import random
 import re
 import json
@@ -10,14 +9,10 @@ from urllib.parse import urljoin
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 # We import sync_playwright only for the install step (which is synchronous)
 from playwright.sync_api import sync_playwright as sync_playwright_installer 
+from core.logger import get_logger
 
 # Setup Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class AnimeHeavenEngine:
     def __init__(self, headless=True):

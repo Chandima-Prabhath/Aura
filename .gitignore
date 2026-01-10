@@ -168,3 +168,5 @@ cython_debug/
 
 # Flet
 storage/
+downloads.json
+downloads_test/1MB.zip
