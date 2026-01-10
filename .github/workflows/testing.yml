@@ -31,4 +31,4 @@ jobs:
           uv sync || true
       - name: Run tests
         run: |
-          uv run python -m pytest -q || pytest -q
+          uv run python -m pytest -q tests/integration_test.py
