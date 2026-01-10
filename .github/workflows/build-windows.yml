@@ -15,18 +15,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
         with:
           lfs: true
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           architecture: 'x64'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
 
@@ -39,14 +39,28 @@ jobs:
       - name: Build GUI
         run: uv run python build-gui.py
 
+      - name: Resolve Artifact Names
+        id: resolve_names
+        shell: pwsh
+        run: |
+          # Find the first EXE in the CLI dist folder and get its base name (e.g. 'aura-cli-0.0.1')
+          $cliFile = Get-ChildItem dist/cli/*.exe | Select-Object -First 1
+          echo "CLI_ARTIFACT_NAME=$($cliFile.BaseName)" >> $env:GITHUB_ENV
+          
+          # Find the first EXE in the GUI dist folder
+          $guiFile = Get-ChildItem dist/gui/*.exe | Select-Object -First 1
+          echo "GUI_ARTIFACT_NAME=$($guiFile.BaseName)" >> $env:GITHUB_ENV
+
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
+          name: ${{ env.CLI_ARTIFACT_NAME }}
           path: dist/cli/*.exe
           if-no-files-found: error
 
       - name: Upload GUI artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
+          name: ${{ env.GUI_ARTIFACT_NAME }}
           path: dist/gui/*.exe
           if-no-files-found: error
