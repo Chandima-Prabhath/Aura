@@ -17,6 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "pillow>=12.1.0",
   "pyinstaller>=6.17.0",
   "pytest>=7.0.0",
 ]
