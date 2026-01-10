@@ -1,30 +1,26 @@
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Constants
 LOG_FILE = "aura.log"
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-def get_logger(name: str) -> logging.Logger:
+def setup_logging(level_str: str = "INFO"):
     """
-    Get a configured logger instance.
-    
-    Args:
-        name (str): The name of the logger (usually __name__)
-        
-    Returns:
-        logging.Logger: Configured logger instance
+    Configure the root logger with file and console handlers.
+    Should be called once at startup or when settings change.
     """
-    logger = logging.getLogger(name)
+    level = getattr(logging, level_str.upper(), logging.INFO)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
     
-    # If logger already has handlers, assume it's configured
-    if logger.handlers:
-        return logger
-        
-    logger.setLevel(logging.INFO)
-    
+    # Remove existing handlers to avoid duplicates during reload
+    if root_logger.handlers:
+        root_logger.handlers.clear()
+
     # Create formatter
     formatter = logging.Formatter(LOG_FORMAT, DATE_FORMAT)
     
@@ -32,14 +28,17 @@ def get_logger(name: str) -> logging.Logger:
     try:
         file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
         file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+        root_logger.addHandler(file_handler)
     except Exception as e:
-        # Fallback if file cannot be written (e.g. permission issues)
-        print(f"Failed to create file handler for logger: {e}", file=sys.stderr)
+        print(f"Failed to create file handler: {e}", file=sys.stderr)
 
     # Console Handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    
-    return logger
+    root_logger.addHandler(console_handler)
+
+def get_logger(name: str) -> logging.Logger:
+    """
+    Get a logger instance. It will inherit configuration from Root.
+    """
+    return logging.getLogger(name)

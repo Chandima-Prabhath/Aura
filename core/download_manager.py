@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Callable
 from pysmartdl2 import SmartDL
 from core.logger import get_logger
 from core.models import DownloadTask, DownloadStatus
+from core.config import settings
 
 logger = get_logger(__name__)
 
@@ -23,11 +24,15 @@ class DownloadManager:
             cls._instance = super(DownloadManager, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, max_concurrent=3, persistence_file="downloads.json"):
+    def __init__(self, max_concurrent=None, persistence_file="downloads.json"):
         if hasattr(self, "_initialized"):
             return
             
-        self.max_concurrent = max_concurrent
+        # If max_concurrent not passed, use settings, else use passed, else default 3
+        if max_concurrent is None:
+             self.max_concurrent = int(settings.get("max_concurrent_downloads", 3))
+        else:
+             self.max_concurrent = max_concurrent
         self.persistence_file = persistence_file
         
         self.tasks: Dict[str, DownloadTask] = {} # id -> DownloadTask
@@ -216,9 +221,12 @@ class DownloadManager:
 
             dest = str(task.dest_folder / task.filename) if task.filename else str(task.dest_folder)
             
+            # Use threads from settings
+            threads_count = int(settings.get("download_threads", 5))
+            
             # PySmartDL Setup
             # threads=5 is a good balance
-            obj = SmartDL(task.url, dest, progress_bar=False, threads=5)
+            obj = SmartDL(task.url, dest, progress_bar=False, threads=threads_count)
             # task.smart_dl = obj # Avoid storing obj in task as it's not pickleable for deepcopy/logging easily? 
             # Actually we don't pickle the task object itself using stdlib pickle usually, 
             # but for simplicity let's keep it local or attached if needed.
