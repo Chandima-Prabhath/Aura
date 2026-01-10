@@ -43,7 +43,7 @@ BASE_PATH = Path(__file__).parent
 CLI_PATH = BASE_PATH / "cli" / "main.py"
 CORE_PATH = BASE_PATH / "core"
 DIST_PATH = BASE_PATH / "dist" / "cli"
-ICON_PATH = BASE_PATH / "src" / "assets" / "icon.png"
+ICON_PATH = BASE_PATH / "src" / "assets" / "icon.ico"
 UPX_PATH = BASE_PATH / "upx" # Folder containing upx.exe
 
 def build_pyinstaller():
