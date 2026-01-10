@@ -41,7 +41,7 @@ class EngineWorker(QThread):
         # This function runs in the worker thread
         # We use asyncio.run() to execute the async code
         async def async_job():
-            engine = AnimeHeavenEngine(headless=False)
+            engine = AnimeHeavenEngine(headless=True)
             try:
                 await engine.start()
                 results = await engine.search_anime(self.query)
