@@ -1,6 +1,6 @@
 [project]
 name = "Aura"
-version = "0.0.1"
+version = "0.0.2-beta"
 description = "A stealthy Python scraper for **AnimeHeaven.me** built with Playwright and managed with UV. Designed to extract direct download links for anime episodes without triggering bot detection or wasting bandwidth on video streaming."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
