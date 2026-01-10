@@ -42,15 +42,15 @@ BASE_PATH = Path(__file__).parent
 CLI_PATH = BASE_PATH / "cli" / "main.py"
 CORE_PATH = BASE_PATH / "core"
 DIST_PATH = BASE_PATH / "dist" / "cli"
-ICON_PATH = BASE_PATH / "src" / "assets" / "icon.ico"
+ICON_PATH = BASE_PATH / "src" / "assets" / "icon.png"
 
 def build_nuitka():
     print("=" * 60)
-    print(f"Nuitka: Building {APP_NAME} GUI...")
+    print(f"Nuitka: Building {APP_NAME} CLI...")
     print("=" * 60)
     
     if not CLI_PATH.exists():
-        sys.exit(f"ERROR: GUI entry not found at {CLI_PATH}")
+        sys.exit(f"ERROR: CLI entry not found at {CLI_PATH}")
     if not CORE_PATH.exists():
         sys.exit(f"ERROR: core directory not found at {CORE_PATH}")
 

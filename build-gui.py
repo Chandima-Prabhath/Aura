@@ -42,7 +42,7 @@ BASE_PATH = Path(__file__).parent
 GUI_PATH = BASE_PATH / "src" / "main.py"
 CORE_PATH = BASE_PATH / "core"
 DIST_PATH = BASE_PATH / "dist" / "gui"
-ICON_PATH = BASE_PATH / "src" / "assets" / "icon.ico"
+ICON_PATH = BASE_PATH / "src" / "assets" / "icon.png"
 
 def build_nuitka():
     print("=" * 60)
