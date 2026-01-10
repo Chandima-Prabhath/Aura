@@ -1,135 +1,181 @@
-# Aura
+<div align="center">
 
-A stealthy Python scraper for **AnimeHeaven.me** built with Playwright and managed with UV. Designed to extract direct download links for anime episodes without triggering bot detection or wasting bandwidth on video streaming.
+<img src="images/logo-cropped.png" alt="Aura logo" style="max-width:420px; width:100%; height:auto;" />
 
-## Features
+<h1>Aura</h1>
+<p><strong>A stealthy, modular Python scraper for AnimeHeaven.me — built with Playwright and managed with <code>uv</code>.</strong></p>
 
-- 🕵️ **Stealth Mode**: Uses Playwright with anti-detection measures to mimic a real user.
-- 🧩 **Modular Design**: Broken into logical steps (Search -> Season Data -> Download Link) for easy GUI integration.
-- 💾 **Data Saving**: Automatically blocks video streams (`.mp4`) to save bandwidth while extracting links.
-- 🧪 **Reproducible Environment**: Uses `uv` for fast, cross-platform dependency management.
-- 📝 **JSON Logging**: Saves all fetched data (results, episodes, links) to `debug_jsons/` for easy debugging.
-- 🧪 **Automated Tests**: Includes integration tests to verify system health.
+</div>
 
-## Prerequisites
+---
 
-- **Python**: 3.11 or higher.
-- **UV**: The Python package manager (install from [github.com/astral-sh/uv](https://github.com/astral-sh/uv)).
-- **OS**: Windows, macOS, or Linux.
+<p align="center">
+    <a href="https://github.com/Chandima-Prabhath/Aura/actions/workflows/release-windows.yml"><img alt="Release" src="https://github.com/Chandima-Prabhath/Aura/actions/workflows/release-windows.yml/badge.svg"/></a>
+    <a href="https://github.com/Chandima-Prabhath/Aura/actions/workflows/testing.yml"><img alt="Testing" src="https://github.com/Chandima-Prabhath/Aura/actions/workflows/testing.yml/badge.svg"/></a>
+    <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"/></a>
+    <a href="https://www.python.org"><img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue.svg"/></a>
+</p>
 
-## Project Structure
+Table of Contents
 
-```
-Aura/
-├── core/                           # Core scraper module
-│   ├── __init__.py
-│   └── engine.py                   # Main AnimeHeavenModular class
-├── cli/                            # CLI interface (future expansion)
-│   └── __init__.py
-├── gui/                            # Flet GUI application
-│   ├── src/
-│   │   ├── main.py                 # GUI entry point
-│   │   └── assets/                 # GUI assets (images, icons, etc.)
-│   └── README.md
-├── tests/                          # Test suite
-│   ├── __init__.py
-│   └── integration_test.py         # Automated integration tests
-├── debug_jsons/                    # Auto-generated JSON logs
-├── pyproject.toml                  # Root project config (UV + dependencies)
-├── uv.lock                         # Locked dependencies
-├── README.md
-└── LICENSE
-```
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Use as a Library](#use-as-a-library)
+- [Debug & Logs](#debug--logs)
+- [Project Layout](#project-layout)
+- [Development](#development)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
-**Key Notes:**
-- `core/` contains the reusable core logic
-- `gui/src/` is the Flet GUI application
-- `cli/` is reserved for future CLI expansion
-- All dependencies managed centrally by UV
+## Overview
+
+`Aura` extracts direct episode download links from AnimeHeaven.me while minimizing bandwidth and avoiding common bot-detection signals. It combines a resilient Playwright automation core with a small CLI and an optional GUI front-end.
+
+## Key Features
+
+- Stealthy Playwright automation with anti-detection techniques
+- Modular design: search → episode data → download link resolution
+- Bandwidth-aware (blocks video streaming during extraction)
+- JSON debug output for reproducible troubleshooting
+- Tested integration flow and development tooling via `uv`
+
+## Requirements
+
+- Python 3.11+
+- `uv` (for development workflows): https://github.com/astral-sh/uv
+- Playwright (installed by project tooling)
+
+Note: The repository is developed on Windows but should work cross-platform where Playwright is supported.
 
 ## Installation
 
-This project uses `uv` to manage the virtual environment and dependencies.
+Recommended — download a release from the Releases page:
 
-### 1. Clone or Navigate to Project
-```powershell
-cd D:\Works\Projects\Aura
-```
+[Latest releases](https://github.com/Chandima-Prabhath/Aura/releases)
 
-### 2. Sync Environment
-Run this command to create the virtual environment and install all dependencies listed in `pyproject.toml`.
+From source
+
+PowerShell
 
 ```powershell
+git clone https://github.com/Chandima-Prabhath/Aura.git
+cd Aura
 uv sync
 ```
 
-### 3. Install Browser Binaries
-Playwright requires browser binaries to operate. Install them via the CLI:
+Build (optional)
 
 ```powershell
-uv run playwright install chromium
+uv run python build-cli.py
+uv run python build-gui.py
 ```
 
-## Usage
+## Quick Start
 
-### Running Tests
-To verify everything is working correctly (Search, Parsing, Link Extraction), run the integration test:
+CLI (development run)
 
 ```powershell
-uv run python tests/integration_test.py
+uv run python cli\main.py
 ```
 
-### Using in your Scripts
+GUI (development run)
 
-You can import the scraper class directly into your scripts or future GUI.
+```powershell
+uv run python src\main.py
+```
+
+CLI example (Windows executable builds provide `aura-cli.exe`):
+
+```powershell
+aura-cli.exe -u "https://animeheaven.me/anime.php?17c9p"
+```
+
+## Use as a Library
+
+Embed the engine in your own async code:
 
 ```python
 import asyncio
-
 from core.engine import AnimeHeavenEngine
 
 async def main():
     engine = AnimeHeavenEngine(headless=True)
     await engine.start()
-
     try:
-        # 1. Search
         results = await engine.search_anime("Slime")
-        season_url = results[0]['url']
-        
-        # 2. Resolve Selection (The logic handles everything here)
-        # This command: "Get me episodes 1 through 3, and episode 10"
-        selection = "1-3,10"
-        
-        downloads = await engine.resolve_episode_selection(season_url, selection)
-        
-        print(f"Ready to download {len(downloads)} episodes:")
+        downloads = await engine.resolve_episode_selection(results[0]["url"], "1-3,10")
         for item in downloads:
-            print(f" - Ep {item['episode_number']}: {item['download_url']}")
-
+            print(f"Ep {item['episode_number']}: {item['download_url']}")
     finally:
         await engine.close()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
-## Debug Output
+## Debug & Logs
 
-The scraper automatically saves data to the `debug_output/` folder during execution:
-- `search_results.json`: List of anime found during search.
-- `episode_list.json`: List of episodes and related shows for a specific season.
-- `download_link.json`: The extracted direct download link for an episode.
+During runs, the tool persists structured debug files to the `debug_jsons/` directory for inspection:
 
-Check these files if you encounter issues or need to inspect the raw data structure for your GUI.
+- `search_results.json`
+- `episode_list.json`
+- `download_link.json`
 
-## Future Roadmap
-- **[✅] Core Engine**: Build the core engine for cli and gui to use.
-- **[ -- ] Flet GUI**: Build a graphical user interface using `flet` to visualize search results and manage downloads.
-- **[ -- ] Download Engine**: Build a fast and stable download engine.
-- **[ -- ] Batch Downloading**: Add functionality to queue multiple episodes.
-- **[ -- ] Resume Capability**: Check if downloaded files exist before re-downloading.
+## Project Layout
+
+Top-level layout (important files and folders):
+
+```
+core/              # Core engine and download manager
+cli/               # Command-line interface
+src/               # GUI entry + assets
+tests/             # Integration & unit tests
+debug_jsons/       # Generated debug output
+pyproject.toml
+build-cli.py
+build-gui.py
+README.md
+LICENSE
+```
+
+## Development
+
+Install dependencies and synchronize the environment with `uv`:
+
+```powershell
+uv sync
+```
+
+Run tests:
+
+```powershell
+uv run python tests/integration_test.py
+```
+
+Recommended next steps
+
+- Add CI to run tests on push (GitHub Actions)
+- Add automated packaging for releases
+
+## Roadmap
+
+- ✅ Core engine
+- ✅ CLI
+- ⏳ PyQT6 GUI
+- ⏳ Download engine & batch downloads
+- ⏳ Resume support
+
+## Contributing
+
+Contributions are welcome. Please open issues for bugs or feature requests and submit pull requests for fixes. Follow standard GitHub flow: branch, test, PR.
 
 ## License
 
-This project is licensed under the **MIT License** – see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE) for details.
+
+---
+
+If you'd like, I can: add badges, create a short CONTRIBUTING.md, or wire up a basic GitHub Actions workflow for tests and linting.
