@@ -1,5 +1,3 @@
-import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -37,14 +35,13 @@ APP_VERSION = project_info.get("version", "0.0.1")
 APP_DESCRIPTION = project_info.get("description", "")
 authors = project_info.get("authors", [])
 APP_PUBLISHER = authors[0].get("name", APP_NAME) if authors else APP_NAME
-APP_EXE_NAME = f"{APP_NAME.lower()}-gui.exe"
+APP_EXE_NAME = f"{APP_NAME.lower()}-gui-{APP_VERSION}.exe"
 
 # Paths
 BASE_PATH = Path(__file__).parent
 GUI_PATH = BASE_PATH / "src" / "main.py"
 CORE_PATH = BASE_PATH / "core"
-DIST_PATH = BASE_PATH / "dist"
-BUILD_PATH = BASE_PATH / "build"
+DIST_PATH = BASE_PATH / "dist" / "gui"
 ICON_PATH = BASE_PATH / "src" / "assets" / "icon.ico"
 
 def build_nuitka():
@@ -56,12 +53,6 @@ def build_nuitka():
         sys.exit(f"ERROR: GUI entry not found at {GUI_PATH}")
     if not CORE_PATH.exists():
         sys.exit(f"ERROR: core directory not found at {CORE_PATH}")
-
-    # Clean previous builds
-    for p in [BUILD_PATH, DIST_PATH]:
-        if p.exists():
-            print(f"Cleaning previous Nuitka build: {p}")
-            shutil.rmtree(p)
 
     # Base Nuitka args
     args = [

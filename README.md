@@ -22,11 +22,11 @@ A stealthy Python scraper for **AnimeHeaven.me** built with Playwright and manag
 ```
 Aura/
 ├── core/                           # Core scraper module
-│   ├── __init__.py
-│   └── engine.py                   # Main AnimeHeavenModular class
-├── cli/                            # CLI interface (future expansion)
-│   └── __init__.py
-├── gui/                            # Flet GUI application
+│   ├── engine.py                   # Main AnimeHeavenModular class
+│   └── download_manager.py         # Download Manager class
+├── cli/                            # CLI interface
+│   └── main.py
+├── gui/                            # PyQT6 GUI application
 │   ├── src/
 │   │   ├── main.py                 # GUI entry point
 │   │   └── assets/                 # GUI assets (images, icons, etc.)
@@ -36,15 +36,14 @@ Aura/
 │   └── integration_test.py         # Automated integration tests
 ├── debug_jsons/                    # Auto-generated JSON logs
 ├── pyproject.toml                  # Root project config (UV + dependencies)
-├── uv.lock                         # Locked dependencies
 ├── README.md
 └── LICENSE
 ```
 
 **Key Notes:**
 - `core/` contains the reusable core logic
-- `gui/src/` is the Flet GUI application
-- `cli/` is reserved for future CLI expansion
+- `src/` is the PyQT6 GUI application
+- `cli/` is the CLI application
 - All dependencies managed centrally by UV
 
 ## Installation
@@ -63,8 +62,8 @@ Run this command to create the virtual environment and install all dependencies 
 uv sync
 ```
 
-### 3. Install Browser Binaries
-Playwright requires browser binaries to operate. Install them via the CLI:
+### 3. Install Browser Binaries (Optional)
+Playwright requires browser binaries to operate. First it will try to use the system installed Chrome or Edge if not found fallback to download playwright managed chromium. You can install it manully this way:
 
 ```powershell
 uv run playwright install chromium

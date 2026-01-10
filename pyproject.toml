@@ -11,6 +11,9 @@ dependencies = [
   "pyqt6>=6.6.0",
   "playwright>=1.57.0",
   "nuitka>=2.8.9",
+  "pysmartdl2>=2.0.2",
+  "textual>=7.1.0",
+  "pyperclip>=1.11.0",
 ]
 
 [dependency-groups]
