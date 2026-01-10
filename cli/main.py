@@ -16,7 +16,8 @@ from textual.widgets import (
     ListItem, Static, Label
 )
 from textual import on, work, log
-from core.engine import AnimeHeavenEngine
+from core.interface import core
+from core.models import AnimeSearchResult, Episode
 
 # ----------------------------------------------------------------------
 # Command Palette Logic
@@ -209,7 +210,7 @@ class SeasonScreen(Screen):
                     yield Button("All", id="btn_select_all", variant="default", classes="btn_small")
                 
                 # Action Button
-                yield Button("GET DOWNLOAD LINKS", id="btn_fetch", variant="primary")
+                yield Button("DOWNLOAD SELECTED", id="btn_fetch", variant="primary")
 
             # 3. Split Content
             with Horizontal(id="split_view"):
@@ -232,8 +233,7 @@ class SeasonScreen(Screen):
         ep_list.append(ListItem(Label("Loading episodes...")))
         
         try:
-            engine = self.app.engine
-            data = await engine.get_season_data(self.anime_url)
+            data = await core.get_season(self.anime_url)
             
             ep_list.clear()
             if not data['episodes']:
@@ -243,7 +243,7 @@ class SeasonScreen(Screen):
             self.all_episodes = data['episodes']
             for ep in self.all_episodes:
                 idx = data['episodes'].index(ep) + 1
-                ep_list.append(EpisodeItem(idx, ep['name']))
+                ep_list.append(EpisodeItem(idx, ep.name))
                 
         except Exception as e:
             log.error(f"Season load error: {e}")
@@ -268,7 +268,7 @@ class SeasonScreen(Screen):
         for idx in sorted_indices:
             if 1 <= idx <= len(self.all_episodes):
                 ep_meta = self.all_episodes[idx - 1]
-                sel_list.append(QueueItem(idx, ep_meta['name']))
+                sel_list.append(QueueItem(idx, ep_meta.name))
 
     @on(Button.Pressed, "#btn_add_range")
     def on_add_range(self) -> None:
@@ -280,7 +280,10 @@ class SeasonScreen(Screen):
             return
 
         total = len(self.all_episodes)
-        parsed_indices = AnimeHeavenEngine._parse_episode_range(text, total)
+        total = len(self.all_episodes)
+        # We need to access static method from Engine or use helper? 
+        # Actually CoreInterface doesn't expose it. We can copy it or use engine directly as property of core.
+        parsed_indices = core.engine._parse_episode_range(text, total)
         
         if not parsed_indices:
             self.notify("Invalid format.", severity="error")
@@ -336,22 +339,45 @@ class SeasonScreen(Screen):
         btn = self.query_one("#btn_fetch", Button)
         original_label = btn.label
         btn.disabled = True
-        btn.label = "FETCHING..."
+        btn.label = "STARTING..."
         
         sorted_eps = sorted(list(self.selected_indices))
-        range_str = ",".join(map(str, sorted_eps))
+        
+        started = 0
+        failed = 0
+
+        # We need to iterate and trigger downloads 1 by 1
+        # To do this efficiently, we can use the existing resolution logic in interface?
+        # Actually interface has download_episode(episode_data).
+        # We have self.all_episodes which are dicts or objects? 
+        # In SeasonScreen.fetch_season_data: self.all_episodes = data['episodes'] which is List[Episode].
         
         try:
-            engine = self.app.engine
-            results = await engine.resolve_episode_selection(self.anime_url, range_str)
+             for idx in sorted_eps:
+                if 1 <= idx <= len(self.all_episodes):
+                    ep_obj = self.all_episodes[idx - 1]
+                    # We must pass a dict to download_episode based on previous analysis of interface.py?
+                    # Let's check interface.py again or assume vars() is safer.
+                    # CoreInterface.download_episode accepts 'episode_data: Dict'.
+                    
+                    # Also we need to ensure the engine resolves the link internally if not refreshed?
+                    # Wait, download_episode calls engine.get_download_link if not present.
+                    # Yes, logic is: episode_url provided -> resolution -> download.
+                    
+                    try:
+                         # We pass vars(ep_obj) to convert Episode to dict
+                         await core.download_episode(vars(ep_obj), self.anime_title)
+                         started += 1
+                    except Exception as e:
+                         log.error(f"Download failed for {ep_obj.name}: {e}")
+                         failed += 1
             
-            if results:
-                self.app.push_screen(ResultsScreen(results))
-            else:
-                self.notify("No links found.", severity="error")
-                
+             self.notify(f"Started {started} downloads. ({failed} failed)", timeout=5)
+             self.selected_indices.clear()
+             self.update_selection_list()
+             
         except Exception as e:
-            log.error(f"Fetch error: {e}")
+            log.error(f"Batch start error: {e}")
             self.notify(f"Error: {str(e)}", severity="error")
         finally:
             btn.disabled = False
@@ -428,8 +454,7 @@ class SearchScreen(Screen):
         results_list.append(ListItem(Label("Searching...")))
         
         try:
-            engine = self.app.engine
-            results = await engine.search_anime(query)
+            results = await core.search(query)
             results_list.clear()
             
             if not results:
@@ -438,7 +463,7 @@ class SearchScreen(Screen):
                 return
 
             for res in results:
-                results_list.append(SearchResultItem(res['title'], res['url'], res['image']))
+                results_list.append(SearchResultItem(res.title, res.url, res.image))
                 
             self.query_one("#app_logo").display = False
             self.query_one("#app_subtitle").display = False
@@ -471,7 +496,6 @@ class AnimeHeavenApp(App):
 
     def __init__(self, initial_query: str = None, initial_url: str = None):
         super().__init__()
-        self.engine = None
         self.initial_query = initial_query
         self.initial_url = initial_url
 
@@ -670,17 +694,16 @@ class AnimeHeavenApp(App):
     }
 
     async def on_mount(self) -> None:
-        self.app.notify("Initializing Engine...", timeout=2)
+        self.app.notify("Initializing Aura Core...", timeout=2)
         try:
-            self.engine = AnimeHeavenEngine(headless=True) 
-            await self.engine.start()
-            self.app.notify("Engine Ready!", severity="information", timeout=2)
+            await core.initialize()
+            self.app.notify("Aura Core Ready!", severity="information", timeout=2)
             
             # Routing Logic
             if self.initial_url:
                 self.notify("Loading direct season...", timeout=2)
                 try:
-                    data = await self.engine.get_season_data(self.initial_url)
+                    data = await core.get_season(self.initial_url)
                     title = data.get('title', 'Unknown Season')
                     self.push_screen(SeasonScreen(self.initial_url, title))
                 except Exception as e:
@@ -699,11 +722,10 @@ class AnimeHeavenApp(App):
             log.error(f"Engine startup error: {e}")
 
     async def on_unmount(self) -> None:
-        if self.engine:
-            try:
-                await self.engine.close()
-            except Exception:
-                pass
+        try:
+            await core.shutdown()
+        except Exception:
+            pass
 
 # ----------------------------------------------------------------------
 # Entry Point & Arg Parsing
