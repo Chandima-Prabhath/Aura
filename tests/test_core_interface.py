@@ -8,7 +8,9 @@ import time
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core.interface import core
+from core.interface import core
 from core.config import settings
+from core.models import DownloadStatus
 
 async def main():
     print("--- Testing Core Interface ---")
@@ -82,10 +84,10 @@ async def main():
                 
             print(f"Status: {task.status} | Progress: {task.progress:.2f}% | Speed: {task.speed}")
             
-            if task.status == "Completed":
+            if task.status == DownloadStatus.COMPLETED:
                 print("SUCCESS: Download Completed!")
                 break
-            if task.status == "Error":
+            if task.status == DownloadStatus.ERROR:
                 print(f"FAILED: Download Error: {task.error_message}")
                 break
             
